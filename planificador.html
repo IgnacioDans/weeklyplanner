@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planificador de Menú</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      background: #EFEEE8;
+      color: #211F1A;
+      -webkit-font-smoothing: antialiased;
+    }
+    #root { min-height: 100vh; display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script>
+    const { useState, useEffect, useMemo, useRef } = React;
+    
+    const DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+    const AC_OPCIONES = ["Libre", "AC Grupos", "AC Tamizaje", "AC Quintana"];
+    const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+    const CLAVE = "planificador-semanal-v2";
+    
+    const semanaVacia = () =>
+      Object.fromEntries(DIAS.map((d) => [d, { comida: null, ac: "Libre" }]));
+    
+    const C = {
+      bg: "#EFEEE8",
+      surface: "#FFFFFF",
+      ink: "#211F1A",
+      sub: "#837D72",
+      line: "#E4E1D8",
+      green: "#2F5D4F",
+      greenSoft: "#E7EFEA",
+      comida: "#B96C1E",
+      comidaSoft: "#F7EBDA",
+      cena: "#584B86",
+      cenaSoft: "#EBE8F3",
+      rojo: "#B4453A",
+      ac: {
+        Libre: { fg: "#2F5D4F", bg: "#E7EFEA" },
+        "AC Grupos": { fg: "#1F5673", bg: "#E0EEF5" },
+        "AC Tamizaje": { fg: "#8A5A1F", bg: "#F6EBDA" },
+        "AC Quintana": { fg: "#7A3B6B", bg: "#F3E3EF" },
+      },
+    };
+    
+    const uid = () => Math.random().toString(36).slice(2, 10);
+    const norm = (s) => (s || "").trim().toLowerCase();
+    const eur = (n) => new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n || 0);
+    const hoyISO = () => new Date().toISOString().slice(0, 10);
+    const etiquetaMes = (k) => {
+      const [y, m] = k.split("-");
+      return `${MESES[+m - 1]} ${y.slice(2)}`;
+    };
+    const fechaCorta = (iso) => {
+      const [y, m, d] = iso.split("-");
+      return `${d}/${m}`;
+    };
+    
+    const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif';
+
+    function App() {
+      const [tab, setTab] = useState("semana");
+      const [cargado, setCargado] = useState(false);
+      const [recetas, setRecetas] = useState([]);
+      const [semana, setSemana] = useState(semanaVacia());
+      const [cenas, setCenas] = useState([]);
+      const [otros, setOtros] = useState([]);
+      const [extra, setExtra] = useState([]);
+      const [comprados, setComprados] = useState({});
+      const [retirados, setRetirados] = useState({});
+      const [compras, setCompras] = useState([]);
+      const [picker, setPicker] = useState(null);
+      const [editorReceta, setEditorReceta] = useState(null);
+      const [editorCompra, setEditorCompra] = useState(null);
+      const [confirmarSemana, setConfirmarSemana] = useState(false);
+      const [compraHecha, setCompraHecha] = useState(false);
+      
+      // Carga desde localStorage
+      useEffect(() => {
+        try {
+          const d = JSON.parse(localStorage.getItem(CLAVE) || "{}");
+          if (d.recetas) setRecetas(d.recetas);
+          if (d.semana) setSemana({ ...semanaVacia(), ...d.semana });
+          if (d.cenas) setCenas(d.cenas);
+          if (d.otros) setOtros(d.otros);
+          if (d.extra) setExtra(d.extra);
+          if (d.comprados) setComprados(d.comprados);
+          if (d.retirados) setRetirados(d.retirados);
+          if (d.compras) setCompras(d.compras);
+        } catch (e) {}
+        setCargado(true);
+      }, []);
+      
+      // Guardado automático
+      useEffect(() => {
+        if (!cargado) return;
+        localStorage.setItem(CLAVE, JSON.stringify({ recetas, semana, cenas, otros, extra, comprados, retirados, compras }));
+      }, [recetas, semana, cenas, otros, extra, comprados, retirados, compras, cargado]);
+      
+      const cargarDatos = (d) => {
+        setRecetas(d.recetas || []);
+        setSemana({ ...semanaVacia(), ...(d.semana || {}) });
+        setCenas(d.cenas || []);
+        setOtros(d.otros || []);
+        setExtra(d.extra || []);
+        setComprados(d.comprados || {});
+        setRetirados(d.retirados || {});
+        setCompras(d.compras || []);
+      };
+      
+      const ingredientesAuto = useMemo(() => {
+        const mapa = new Map();
+        const add = (recetaId) => {
+          const rec = recetas.find((x) => x.id === recetaId);
+          if (!rec) return;
+          rec.ingredientes.forEach((ing) => {
+            const k = norm(ing);
+            if (!k) return;
+            if (mapa.has(k)) mapa.get(k).veces += 1;
+            else mapa.set(k, { clave: k, nombre: ing.trim(), veces: 1 });
+          });
+        };
+        DIAS.forEach((d) => semana[d].comida && add(semana[d].comida));
+        cenas.forEach((c) => add(c.recetaId));
+        return [...mapa.values()].filter((i) => !retirados[i.clave]).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      }, [semana, cenas, recetas, retirados]);
+      
+      const pendientes = ingredientesAuto.filter((i) => !comprados[i.clave]).length + extra.filter((i) => !i.hecho).length + otros.filter((i) => !i.hecho).length;
+      
+      const marcados = useMemo(() => ({
+        auto: ingredientesAuto.filter((i) => comprados[i.clave]),
+        extra: extra.filter((i) => i.hecho),
+        otros: otros.filter((i) => i.hecho),
+      }), [ingredientesAuto, comprados, extra, otros]);
+      const nMarcados = marcados.auto.length + marcados.extra.length + marcados.otros.length;
+      
+      const limpiarMarcados = () => {
+        setRetirados((p) => { const n = { ...p }; marcados.auto.forEach((i) => (n[i.clave] = true)); return n; });
+        setComprados((p) => { const n = { ...p }; marcados.auto.forEach((i) => delete n[i.clave]); return n; });
+        setExtra((p) => p.filter((i) => !i.hecho));
+        setOtros((p) => p.filter((i) => !i.hecho));
+      };
+      
+      const exportar = async () => {
+        const data = datosJSON();
+        try {
+          const file = new File([data], "planificador.json", { type: "application/json" });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: "Planificador" });
+            return;
+          }
+        } catch (e) { return; }
+        const blob = new Blob([data], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "planificador.json";
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+      
+      const importar = (file) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try { cargarDatos(JSON.parse(reader.result)); }
+          catch (e) { alert("No se pudo leer el archivo."); }
+        };
+        reader.readAsText(file);
+      };
+      
+      const datosJSON = () => JSON.stringify({ recetas, semana, cenas, otros, extra, comprados, retirados, compras }, null, 2);
+      
+      const asignarComida = (dia, recetaId) => setSemana((p) => ({ ...p, [dia]: { ...p[dia], comida: recetaId } }));
+      const cambiarAC = (dia, ac) => setSemana((p) => ({ ...p, [dia]: { ...p[dia], ac } }));
+      const addCena = (recetaId) => setCenas((p) => [...p, { id: uid(), recetaId, hecha: false }]);
+      const nuevaSemana = () => {
+        setSemana(semanaVacia());
+        setCenas([]);
+        setOtros([]);
+        setExtra([]);
+        setComprados({});
+        setRetirados({});
+        setConfirmarSemana(false);
+        setTab("semana");
+      };
+      const borrarReceta = (id) => {
+        setRecetas((p) => p.filter((r) => r.id !== id));
+        setSemana((p) => { const n = { ...p }; DIAS.forEach((d) => n[d].comida === id && (n[d] = { ...n[d], comida: null })); return n; });
+        setCenas((p) => p.filter((c) => c.recetaId !== id));
+      };
+      const guardarReceta = (datos) => {
+        const nueva = !datos.id;
+        const id = datos.id || uid();
+        const completa = { ...datos, id };
+        if (nueva) setRecetas((p) => [...p, completa]);
+        else setRecetas((p) => p.map((r) => (r.id === id ? completa : r)));
+        if (editorReceta?.desde) {
+          if (editorReceta.desde.tipo === "comida") asignarComida(editorReceta.desde.dia, id);
+          else addCena(id);
+          setPicker(null);
+        }
+        setEditorReceta(null);
+      };
+      
+      if (!cargado) return React.createElement("div", { style: { ...s.pantalla, alignItems: "center", justifyContent: "center" } },
+        React.createElement("span", { style: { marginTop: 10, color: C.sub, fontSize: 14 } }, "Cargando…")
+      );
+      
+      const vistaSemana = tab === "semana" ? React.createElement(VistaSemana, {
+        semana, cenas, recetas,
+        onComida: (dia) => setPicker({ tipo: "comida", dia }),
+        onAC: cambiarAC,
+        onAddCena: () => setPicker({ tipo: "cena" }),
+        onToggleCena: (id) => setCenas((p) => p.map((c) => (c.id === id ? { ...c, hecha: !c.hecha } : c))),
+        onQuitarCena: (id) => setCenas((p) => p.filter((c) => c.id !== id)),
+        onNueva: () => setConfirmarSemana(true),
+      }) : null;
+      
+      const vistaCompra = tab === "compra" ? React.createElement(VistaCompra, {
+        ingredientesAuto, comprados, setComprados, extra, setExtra, otros, setOtros,
+        nMarcados,
+        onCompraHecha: () => setCompraHecha(true),
+      }) : null;
+      
+      const vistaRecetario = tab === "recetario" ? React.createElement(VistaRecetario, {
+        recetas,
+        onNueva: (tipo) => setEditorReceta({ tipo }),
+        onEditar: (r) => setEditorReceta({ tipo: r.tipo, receta: r }),
+        onBorrar: borrarReceta,
+      }) : null;
+      
+      const vistaRegistro = tab === "registro" ? React.createElement(VistaRegistro, {
+        compras, recetas,
+        onNueva: () => setEditorCompra({ prefill: null }),
+        onEditar: (c) => setEditorCompra({ compra: c }),
+        onBorrar: (id) => setCompras((p) => p.filter((c) => c.id !== id)),
+        onExportar: exportar,
+        onImportar: importar,
+      }) : null;
+      
+      return React.createElement("div", { style: s.pantalla },
+        React.createElement("div", { style: s.contenedor },
+          vistaSemana, vistaCompra, vistaRecetario, vistaRegistro
+        ),
+        React.createElement("nav", { style: s.tabbar },
+          React.createElement(TabBtn, { label: "Semana", activo: tab === "semana", onClick: () => setTab("semana") }),
+          React.createElement(TabBtn, { label: "Compra", activo: tab === "compra", onClick: () => setTab("compra"), badge: pendientes }),
+          React.createElement(TabBtn, { label: "Recetario", activo: tab === "recetario", onClick: () => setTab("recetario") }),
+          React.createElement(TabBtn, { label: "Registro", activo: tab === "registro", onClick: () => setTab("registro") })
+        ),
+        picker && React.createElement(SelectorReceta, {
+          picker, recetas,
+          asignado: picker.tipo === "comida" ? semana[picker.dia].comida : null,
+          onElegir: (id) => { picker.tipo === "comida" ? asignarComida(picker.dia, id) : addCena(id); setPicker(null); },
+          onQuitar: picker.tipo === "comida" && semana[picker.dia].comida ? () => { asignarComida(picker.dia, null); setPicker(null); } : null,
+          onNueva: () => setEditorReceta({ tipo: picker.tipo, desde: { ...picker } }),
+          onCerrar: () => setPicker(null),
+        }),
+        editorReceta && React.createElement(EditorReceta, { inicial: editorReceta, onGuardar: guardarReceta, onCerrar: () => setEditorReceta(null) }),
+        editorCompra && React.createElement(EditorCompra, {
+          inicial: editorCompra,
+          supermercados: [...new Set(compras.map((c) => c.supermercado).filter(Boolean))],
+          onGuardar: (compra) => {
+            if (compra.id) setCompras((p) => p.map((c) => (c.id === compra.id ? compra : c)));
+            else setCompras((p) => [...p, { ...compra, id: uid() }]);
+            if (editorCompra.cleanup) limpiarMarcados();
+            setEditorCompra(null);
+          },
+          onCerrar: () => setEditorCompra(null),
+        }),
+        confirmarSemana && React.createElement(Modal, { onCerrar: () => setConfirmarSemana(false), titulo: "Empezar semana nueva" },
+          React.createElement("p", { style: s.parrafo }, "Se borran las comidas de cada día, las cenas, las guardias de Marina y toda la lista de la compra. El recetario y el registro de gastos se mantienen."),
+          React.createElement("div", { style: { display: "flex", gap: 10 } },
+            React.createElement("button", { style: s.btnSec, onClick: () => setConfirmarSemana(false) }, "Cancelar"),
+            React.createElement("button", { style: { ...s.btnPrim, background: C.rojo, flex: 1 }, onClick: nuevaSemana }, "Vaciar semana")
+          )
+        ),
+        compraHecha && React.createElement(Modal, { onCerrar: () => setCompraHecha(false), titulo: "Compra hecha" },
+          React.createElement("p", { style: s.parrafo }, `Se quitarán de la lista los ${nMarcados} elemento${nMarcados === 1 ? "" : "s"} que has marcado. ¿Quieres anotar antes cuánto ha costado para el registro de gastos?`),
+          React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+            React.createElement("button", { style: { ...s.btnPrim, background: C.green }, onClick: () => {
+              setEditorCompra({
+                cleanup: true,
+                prefill: [
+                  ...marcados.auto.map((i) => ({ nombre: i.nombre })),
+                  ...marcados.extra.map((i) => ({ nombre: i.texto })),
+                  ...marcados.otros.map((i) => ({ nombre: i.texto })),
+                ],
+              });
+              setCompraHecha(false);
+            } }, "Anotar precios y borrar"),
+            React.createElement("button", { style: s.btnSec, onClick: () => { limpiarMarcados(); setCompraHecha(false); } }, "Solo borrar de la lista")
+          )
+        )
+      );
+    }
+
+    // Componentes UI simplificados (versión compacta para este HTML)
+    function VistaSemana({ semana, cenas, recetas, onComida, onAC, onAddCena, onToggleCena, onQuitarCena, onNueva }) {
+      const nombre = (id) => recetas.find((r) => r.id === id)?.nombre;
+      return React.createElement(React.Fragment, null,
+        React.createElement(Cabecera, { titulo: "Menú de la semana", subtitulo: "Comidas por día · cenas en lista para ir asignando", accion: React.createElement("button", { style: s.btnCabecera, onClick: onNueva }, "Nueva semana") }),
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+          DIAS.map((dia) => React.createElement("div", { key: dia, style: s.card },
+            React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 } },
+              React.createElement("span", { style: { fontSize: 17, fontWeight: 650, color: C.ink, letterSpacing: -0.2 } }, dia),
+              React.createElement(ChipAC, { valor: semana[dia].ac, onChange: (v) => onAC(dia, v) })
+            ),
+            React.createElement(Slot, { tipo: "comida", nombre: nombre(semana[dia].comida), onClick: () => onComida(dia) })
+          ))
+        ),
+        React.createElement("div", { style: { ...s.card, marginTop: 16 } },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 4 } },
+            React.createElement("h2", { style: { fontSize: 15.5, fontWeight: 700, color: C.ink, margin: 0 } }, "Cenas de la semana")
+          ),
+          React.createElement("p", { style: { color: C.sub, fontSize: 13, margin: "0 0 12px" } }, "Tacha cada cena cuando la asignéis a un día sobre la marcha."),
+          cenas.length === 0 && React.createElement("p", { style: { color: C.sub, fontSize: 13.5, margin: "0 0 12px" } }, "Aún no hay cenas. Añade las que os apetezcan esta semana."),
+          React.createElement("div", { style: { display: "flex", flexDirection: "column" } },
+            cenas.map((c) => React.createElement("div", { key: c.id, style: { display: "flex", alignItems: "center", gap: 11, padding: "9px 0", borderBottom: `1px solid ${C.line}` } },
+              React.createElement("button", { onClick: () => onToggleCena(c.id), style: { width: 23, height: 23, borderRadius: 999, border: `2px solid ${c.hecha ? C.cena : C.line}`, background: c.hecha ? C.cena : "transparent", display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, padding: 0 } }, c.hecha ? "✓" : ""),
+              React.createElement("span", { style: { flex: 1, fontSize: 15, color: c.hecha ? C.sub : C.ink, textDecoration: c.hecha ? "line-through" : "none" } }, nombre(c.recetaId) || "Receta eliminada"),
+              React.createElement("button", { onClick: () => onQuitarCena(c.id), style: s.iconoBtn }, "✕")
+            ))
+          ),
+          React.createElement("button", { onClick: onAddCena, style: { ...s.btnDashed, marginTop: 14 } }, "+ Añadir cena")
+        )
+      );
+    }
+
+    function VistaCompra({ ingredientesAuto, comprados, setComprados, extra, setExtra, otros, setOtros, nMarcados, onCompraHecha }) {
+      const [nuevoIng, setNuevoIng] = useState("");
+      const [nuevoOtro, setNuevoOtro] = useState("");
+      const toggleAuto = (clave) => setComprados((p) => ({ ...p, [clave]: !p[clave] }));
+      const addExtra = () => { const t = nuevoIng.trim(); if (!t) return; setExtra((p) => [...p, { id: uid(), texto: t, hecho: false }]); setNuevoIng(""); };
+      const addOtro = () => { const t = nuevoOtro.trim(); if (!t) return; setOtros((p) => [...p, { id: uid(), texto: t, hecho: false }]); setNuevoOtro(""); };
+      const vacio = ingredientesAuto.length === 0 && extra.length === 0 && otros.length === 0;
+      return React.createElement(React.Fragment, null,
+        React.createElement(Cabecera, { titulo: "Lista de la compra", subtitulo: "Los ingredientes se rellenan solos desde el menú" }),
+        vacio && React.createElement("div", { style: s.vacio }, React.createElement("p", { style: { margin: "12px 0 0", color: C.sub, fontSize: 14.5, lineHeight: 1.5 } }, "Asigna comidas y cenas en la pestaña Semana y sus ingredientes aparecerán aquí.")),
+        !vacio && React.createElement(Seccion, { titulo: "Ingredientes", color: C.green },
+          ingredientesAuto.map((i) => React.createElement(Fila, { key: i.clave, texto: i.nombre, extra: i.veces > 1 ? `×${i.veces}` : null, hecho: !!comprados[i.clave], onToggle: () => toggleAuto(i.clave) })),
+          extra.map((i) => React.createElement(Fila, { key: i.id, texto: i.texto, hecho: i.hecho, onToggle: () => setExtra((p) => p.map((x) => (x.id === i.id ? { ...x, hecho: !x.hecho } : x))), onBorrar: () => setExtra((p) => p.filter((x) => x.id !== i.id)) })),
+          React.createElement(EntradaAñadir, { valor: nuevoIng, setValor: setNuevoIng, onAdd: addExtra, placeholder: "Añadir ingrediente suelto" })
+        ),
+        React.createElement(Seccion, { titulo: "Otros", color: C.cena },
+          otros.length === 0 && React.createElement("p", { style: { color: C.sub, fontSize: 13.5, margin: "2px 0 10px" } }, "Limpieza, papel, bolsas… lo que no sea ingrediente."),
+          otros.map((i) => React.createElement(Fila, { key: i.id, texto: i.texto, hecho: i.hecho, onToggle: () => setOtros((p) => p.map((x) => (x.id === i.id ? { ...x, hecho: !x.hecho } : x))), onBorrar: () => setOtros((p) => p.filter((x) => x.id !== i.id)) })),
+          React.createElement(EntradaAñadir, { valor: nuevoOtro, setValor: setNuevoOtro, onAdd: addOtro, placeholder: "Añadir artículo" })
+        ),
+        nMarcados > 0 && React.createElement("button", { style: { ...s.btnPrim, background: C.green, width: "100%", marginTop: 4 }, onClick: onCompraHecha }, `Compra hecha (${nMarcados})`)
+      );
+    }
+
+    function Fila({ texto, extra, hecho, onToggle, onBorrar }) {
+      return React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 11, padding: "9px 0", borderBottom: `1px solid ${C.line}` } },
+        React.createElement("button", { onClick: onToggle, style: { width: 23, height: 23, borderRadius: 999, border: `2px solid ${hecho ? C.green : C.line}`, background: hecho ? C.green : "transparent", display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, padding: 0 } }, hecho ? "✓" : ""),
+        React.createElement("span", { style: { flex: 1, fontSize: 15, color: hecho ? C.sub : C.ink, textDecoration: hecho ? "line-through" : "none" } }, texto),
+        extra && React.createElement("span", { style: { fontSize: 12.5, color: C.sub, fontWeight: 600 } }, extra),
+        onBorrar && React.createElement("button", { onClick: onBorrar, style: s.iconoBtn }, "✕")
+      );
+    }
+
+    function EntradaAñadir({ valor, setValor, onAdd, placeholder }) {
+      return React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+        React.createElement("input", { value: valor, onChange: (e) => setValor(e.target.value), onKeyDown: (e) => e.key === "Enter" && onAdd(), placeholder, style: s.input }),
+        React.createElement("button", { onClick: onAdd, style: s.btnAdd }, "+")
+      );
+    }
+
+    function VistaRecetario({ recetas, onNueva, onEditar, onBorrar }) {
+      const [filtro, setFiltro] = useState("todas");
+      const lista = recetas.filter((r) => filtro === "todas" || r.tipo === filtro).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      return React.createElement(React.Fragment, null,
+        React.createElement(Cabecera, { titulo: "Recetario", subtitulo: "Tus platos guardados con sus ingredientes", accion: React.createElement("button", { style: s.btnCabecera, onClick: () => onNueva("comida") }, "+ Nueva") }),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 16 } },
+          [{ k: "todas", t: "Todas" }, { k: "comida", t: "Comidas" }, { k: "cena", t: "Cenas" }].map((f) => React.createElement("button", { key: f.k, onClick: () => setFiltro(f.k), style: { padding: "7px 15px", borderRadius: 999, border: "none", fontSize: 13.5, fontWeight: 600, cursor: "pointer", background: filtro === f.k ? C.green : C.surface, color: filtro === f.k ? "#fff" : C.sub, boxShadow: filtro === f.k ? "none" : `inset 0 0 0 1px ${C.line}` } }, f.t))
+        ),
+        lista.length === 0 ? React.createElement("div", { style: s.vacio }, React.createElement("p", { style: { margin: "12px 0 16px", color: C.sub, fontSize: 14.5, lineHeight: 1.5 } }, "Aún no hay recetas. Añade tus platos habituales con sus ingredientes y podrás asignarlos en un toque."), React.createElement("button", { style: { ...s.btnPrim, background: C.green }, onClick: () => onNueva("comida") }, "+ Añadir primera receta"))
+          : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+              lista.map((r) => React.createElement(TarjetaReceta, { key: r.id, receta: r, onEditar: () => onEditar(r), onBorrar: () => onBorrar(r.id) }))
+            )
+      );
+    }
+
+    function TarjetaReceta({ receta, onEditar, onBorrar }) {
+      return React.createElement("div", { style: s.card },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 8 } },
+          React.createElement("span", { style: { fontSize: 16.5, fontWeight: 650, color: C.ink, flex: 1, letterSpacing: -0.2 } }, receta.nombre),
+          React.createElement("button", { onClick: onEditar, style: s.iconoBtn }, "✎"),
+          React.createElement("button", { onClick: onBorrar, style: s.iconoBtn }, "✕")
+        ),
+        receta.ingredientes.length > 0 && React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+          receta.ingredientes.map((ing, i) => React.createElement("span", { key: i, style: { fontSize: 12.5, color: C.sub, background: C.bg, padding: "3px 9px", borderRadius: 7 } }, ing))
+        )
+      );
+    }
+
+    function EditorReceta({ inicial, onGuardar, onCerrar }) {
+      const r = inicial.receta;
+      const [nombre, setNombre] = useState(r?.nombre || "");
+      const [tipo, setTipo] = useState(r?.tipo || inicial.tipo || "comida");
+      const [ings, setIngs] = useState(r?.ingredientes || []);
+      const [nuevoIng, setNuevoIng] = useState("");
+      const addIng = () => { const t = nuevoIng.trim(); if (!t) return; setIngs((p) => [...p, t]); setNuevoIng(""); };
+      const guardar = () => { if (!nombre.trim()) return; onGuardar({ id: r?.id, nombre: nombre.trim(), tipo, ingredientes: ings }); };
+      return React.createElement(Modal, { onCerrar, titulo: r ? "Editar receta" : "Nueva receta" },
+        React.createElement("label", { style: s.label }, "Nombre del plato"),
+        React.createElement("input", { value: nombre, onChange: (e) => setNombre(e.target.value), placeholder: "Ej. Lentejas con verduras", style: { ...s.input, marginBottom: 16 }, autoFocus: true }),
+        React.createElement("label", { style: s.label }, "Tipo"),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18 } },
+          [{ k: "comida", t: "Comida" }, { k: "cena", t: "Cena" }].map((o) => {
+            const act = tipo === o.k;
+            return React.createElement("button", { key: o.k, onClick: () => setTipo(o.k), style: { flex: 1, padding: "11px 0", borderRadius: 12, border: `1.5px solid ${act ? (o.k === "comida" ? C.comida : C.cena) : C.line}`, background: act ? (o.k === "comida" ? C.comidaSoft : C.cenaSoft) : "transparent", color: act ? (o.k === "comida" ? C.comida : C.cena) : C.sub, fontSize: 15, fontWeight: 600, cursor: "pointer" } }, o.t);
+          })
+        ),
+        React.createElement("label", { style: s.label }, "Ingredientes"),
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 } },
+          ings.map((ing, i) => React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, background: C.bg, padding: "8px 12px", borderRadius: 10 } },
+            React.createElement("span", { style: { flex: 1, fontSize: 14.5, color: C.ink } }, ing),
+            React.createElement("button", { onClick: () => setIngs((p) => p.filter((_, j) => j !== i)), style: s.iconoBtn }, "✕")
+          ))
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 22 } },
+          React.createElement("input", { value: nuevoIng, onChange: (e) => setNuevoIng(e.target.value), onKeyDown: (e) => e.key === "Enter" && addIng(), placeholder: "Añadir ingrediente", style: s.input }),
+          React.createElement("button", { onClick: addIng, style: s.btnAdd }, "+")
+        ),
+        React.createElement("button", { onClick: guardar, disabled: !nombre.trim(), style: { ...s.btnPrim, background: nombre.trim() ? C.green : C.line, width: "100%", opacity: nombre.trim() ? 1 : 0.7 } }, r ? "Guardar cambios" : "Guardar receta")
+      );
+    }
+
+    function SelectorReceta({ picker, recetas, asignado, onElegir, onQuitar, onNueva, onCerrar }) {
+      const esComida = picker.tipo === "comida";
+      const opciones = recetas.filter((r) => r.tipo === picker.tipo).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+      return React.createElement(Modal, { onCerrar, titulo: esComida ? `Comida · ${picker.dia}` : "Añadir cena" },
+        opciones.length === 0 ? React.createElement("p", { style: s.parrafo }, `No tienes ${esComida ? "comidas" : "cenas"} en el recetario todavía. Crea la primera aquí mismo.`)
+          : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, maxHeight: "45vh", overflowY: "auto" } },
+              opciones.map((r) => {
+                const act = r.id === asignado;
+                return React.createElement("button", { key: r.id, onClick: () => onElegir(r.id), style: { display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, border: `1.5px solid ${act ? (esComida ? C.comida : C.cena) : C.line}`, background: act ? (esComida ? C.comidaSoft : C.cenaSoft) : C.surface, cursor: "pointer", textAlign: "left" } },
+                  React.createElement("span", { style: { flex: 1 } }, React.createElement("div", { style: { fontSize: 15.5, fontWeight: 600, color: C.ink } }, r.nombre), r.ingredientes.length > 0 && React.createElement("div", { style: { fontSize: 12.5, color: C.sub, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.ingredientes.join(", "))),
+                  act && React.createElement("span", { style: { color: esComida ? C.comida : C.cena } }, "✓")
+                );
+              })
+            ),
+        React.createElement("div", { style: { display: "flex", gap: 10 } },
+          onQuitar && React.createElement("button", { style: s.btnSec, onClick: onQuitar }, "Quitar"),
+          React.createElement("button", { style: { ...s.btnPrim, background: esComida ? C.comida : C.cena, flex: 1 }, onClick: onNueva }, `+ Nueva ${esComida ? "comida" : "cena"}`)
+        )
+      );
+    }
+
+    function VistaRegistro({ compras, recetas, onNueva, onEditar, onBorrar, onExportar, onImportar }) {
+      const fileRef = useRef(null);
+      const [ingSel, setIngSel] = useState(null);
+      const totalCompra = (c) => c.items.reduce((s, i) => s + (parseFloat(i.precio) || 0), 0);
+      const gastoTotal = compras.reduce((s, c) => s + totalCompra(c), 0);
+      
+      return React.createElement(React.Fragment, null,
+        React.createElement(Cabecera, { titulo: "Registro de gastos", subtitulo: "Anota tus compras y controla precios", accion: React.createElement("button", { style: s.btnCabecera, onClick: onNueva }, "+ Compra") }),
+        compras.length === 0 ? React.createElement("div", { style: s.vacio }, React.createElement("p", { style: { margin: "12px 0 16px", color: C.sub, fontSize: 14.5, lineHeight: 1.5 } }, "Registra cada compra con cantidades, precio y supermercado."), React.createElement("button", { style: { ...s.btnPrim, background: C.green }, onClick: onNueva }, "+ Anotar primera compra"))
+          : React.createElement(React.Fragment, null,
+              React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14 } },
+                React.createElement("div", { style: { ...s.card, flex: 1, padding: 14 } },
+                  React.createElement("span", { style: { fontSize: 12, color: C.sub, fontWeight: 600 } }, "Gasto total"),
+                  React.createElement("div", { style: { fontSize: 22, fontWeight: 750, color: C.ink, marginTop: 2, letterSpacing: -0.5 } }, eur(gastoTotal))
+                ),
+                React.createElement("div", { style: { ...s.card, flex: 1, padding: 14 } },
+                  React.createElement("span", { style: { fontSize: 12, color: C.sub, fontWeight: 600 } }, "Compras"),
+                  React.createElement("div", { style: { fontSize: 22, fontWeight: 750, color: C.ink, marginTop: 2, letterSpacing: -0.5 } }, compras.length)
+                )
+              ),
+              React.createElement(Seccion, { titulo: "Compras registradas", color: C.green },
+                [...compras].sort((a, b) => b.fecha.localeCompare(a.fecha)).map((c) => React.createElement("div", { key: c.id, style: { padding: "11px 0", borderBottom: `1px solid ${C.line}` } },
+                  React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                    React.createElement("div", { style: { flex: 1 } },
+                      React.createElement("div", { style: { fontSize: 14.5, fontWeight: 650, color: C.ink } }, c.supermercado || "Sin supermercado"),
+                      React.createElement("div", { style: { fontSize: 12.5, color: C.sub } }, `${fechaCorta(c.fecha)} · ${c.items.length} artículo${c.items.length === 1 ? "" : "s"}`)
+                    ),
+                    React.createElement("span", { style: { fontSize: 15.5, fontWeight: 700, color: C.ink } }, eur(totalCompra(c))),
+                    React.createElement("button", { onClick: () => onEditar(c), style: s.iconoBtn }, "✎"),
+                    React.createElement("button", { onClick: () => onBorrar(c.id), style: s.iconoBtn }, "✕")
+                  )
+                ))
+              )
+            ),
+        React.createElement(Seccion, { titulo: "Sincronizar con Marina", color: C.sub },
+          React.createElement("p", { style: { color: C.sub, fontSize: 13, margin: "0 0 4px", lineHeight: 1.5 } }, "Guardad un archivo planificador.json en una carpeta de iCloud compartida. Al abrir la app, pulsa Importar para traer lo último. Al terminar, pulsa Exportar y guarda encima del mismo archivo."),
+          React.createElement("div", { style: { display: "flex", gap: 10, marginTop: 12 } },
+            React.createElement("button", { style: { ...s.btnPrim, background: C.green, flex: 1, fontSize: 14.5 }, onClick: () => fileRef.current?.click() }, "↓ Importar"),
+            React.createElement("button", { style: { ...s.btnSec, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 14.5 }, onClick: onExportar }, "↑ Exportar"),
+            React.createElement("input", { ref: fileRef, type: "file", accept: "application/json", style: { display: "none" }, onChange: (e) => e.target.files[0] && onImportar(e.target.files[0]) })
+          )
+        )
+      );
+    }
+
+    function EditorCompra({ inicial, supermercados, onGuardar, onCerrar }) {
+      const c = inicial.compra;
+      const prefill = inicial.prefill;
+      const [fecha, setFecha] = useState(c?.fecha || hoyISO());
+      const [supermercado, setSupermercado] = useState(c?.supermercado || "");
+      const [items, setItems] = useState(c?.items || (prefill && prefill.length ? prefill.map((p) => ({ nombre: p.nombre, cantidad: "1", precio: "" })) : [{ nombre: "", cantidad: "1", precio: "" }]));
+      const setItem = (i, campo, val) => setItems((p) => p.map((it, j) => (j === i ? { ...it, [campo]: val } : it)));
+      const addRow = () => setItems((p) => [...p, { nombre: "", cantidad: "1", precio: "" }]);
+      const total = items.reduce((s, i) => s + (parseFloat(i.precio) || 0), 0);
+      const valido = items.some((i) => i.nombre.trim());
+      const guardar = () => {
+        if (!valido) return;
+        onGuardar({ id: c?.id, fecha, supermercado: supermercado.trim(), items: items.filter((i) => i.nombre.trim()).map((i) => ({ nombre: i.nombre.trim(), cantidad: i.cantidad, precio: i.precio })) });
+      };
+      return React.createElement(Modal, { onCerrar, titulo: c ? "Editar compra" : "Anotar compra" },
+        React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 16 } },
+          React.createElement("div", { style: { flex: 1 } },
+            React.createElement("label", { style: s.label }, "Fecha"),
+            React.createElement("input", { type: "date", value: fecha, onChange: (e) => setFecha(e.target.value), style: s.input })
+          ),
+          React.createElement("div", { style: { flex: 1.3 } },
+            React.createElement("label", { style: s.label }, "Supermercado"),
+            React.createElement("input", { value: supermercado, onChange: (e) => setSupermercado(e.target.value), placeholder: "Mercadona…", style: s.input })
+          )
+        ),
+        React.createElement("label", { style: s.label }, "Artículos"),
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 6, padding: "0 2px" } },
+          React.createElement("span", { style: { flex: 1, fontSize: 11, color: C.sub, fontWeight: 600 } }, "Nombre"),
+          React.createElement("span", { style: { width: 52, fontSize: 11, color: C.sub, fontWeight: 600, textAlign: "center" } }, "Cant."),
+          React.createElement("span", { style: { width: 66, fontSize: 11, color: C.sub, fontWeight: 600, textAlign: "center" } }, "Precio €"),
+          React.createElement("span", { style: { width: 28 } })
+        ),
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 } },
+          items.map((it, i) => React.createElement("div", { key: i, style: { display: "flex", gap: 6, alignItems: "center" } },
+            React.createElement("input", { value: it.nombre, onChange: (e) => setItem(i, "nombre", e.target.value), placeholder: "Artículo", style: { ...s.input, flex: 1, padding: "9px 11px" } }),
+            React.createElement("input", { value: it.cantidad, onChange: (e) => setItem(i, "cantidad", e.target.value), inputMode: "decimal", style: { ...s.input, width: 52, padding: "9px 6px", textAlign: "center" } }),
+            React.createElement("input", { value: it.precio, onChange: (e) => setItem(i, "precio", e.target.value), inputMode: "decimal", placeholder: "0,00", style: { ...s.input, width: 66, padding: "9px 8px", textAlign: "center" } }),
+            React.createElement("button", { onClick: () => setItems((p) => p.filter((_, j) => j !== i)), style: { ...s.iconoBtn, width: 28 } }, "✕")
+          ))
+        ),
+        React.createElement("button", { onClick: addRow, style: { ...s.btnDashed, marginBottom: 18 } }, "+ Añadir artículo"),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, padding: "0 2px" } },
+          React.createElement("span", { style: { fontSize: 14, color: C.sub, fontWeight: 600 } }, "Total"),
+          React.createElement("span", { style: { fontSize: 20, fontWeight: 750, color: C.ink, letterSpacing: -0.4 } }, eur(total))
+        ),
+        React.createElement("button", { onClick: guardar, disabled: !valido, style: { ...s.btnPrim, background: valido ? C.green : C.line, width: "100%", opacity: valido ? 1 : 0.7 } }, c ? "Guardar cambios" : "Guardar compra")
+      );
+    }
+
+    function Cabecera({ titulo, subtitulo, accion }) {
+      return React.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 18 } },
+        React.createElement("div", null,
+          React.createElement("h1", { style: { fontSize: 25, fontWeight: 750, color: C.ink, margin: 0, letterSpacing: -0.6 } }, titulo),
+          subtitulo && React.createElement("p", { style: { fontSize: 13.5, color: C.sub, margin: "3px 0 0", lineHeight: 1.4 } }, subtitulo)
+        ),
+        accion
+      );
+    }
+
+    function Seccion({ titulo, color, children }) {
+      return React.createElement("div", { style: { ...s.card, marginBottom: 14 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+          React.createElement("h2", { style: { fontSize: 15, fontWeight: 700, color: C.ink, margin: 0 } }, titulo)
+        ),
+        children
+      );
+    }
+
+    function TabBtn({ label, activo, onClick, badge }) {
+      return React.createElement("button", { onClick, style: { ...s.tabBtn, color: activo ? C.green : C.sub } },
+        React.createElement("div", { style: { position: "relative" } },
+          React.createElement("span", { style: { fontSize: 22 } }, badge > 0 && React.createElement("span", { style: s.badge }, badge > 99 ? "99+" : badge))
+        ),
+        React.createElement("span", { style: { fontSize: 10.5, fontWeight: activo ? 700 : 500, color: activo ? C.green : C.sub } }, label)
+      );
+    }
+
+    function Modal({ titulo, children, onCerrar }) {
+      return React.createElement("div", { style: s.modalFondo, onClick: onCerrar },
+        React.createElement("div", { style: s.modalHoja, onClick: (e) => e.stopPropagation() },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 } },
+            React.createElement("h2", { style: { fontSize: 18.5, fontWeight: 700, color: C.ink, margin: 0, letterSpacing: -0.3 } }, titulo),
+            React.createElement("button", { onClick: onCerrar, style: { ...s.iconoBtn, background: C.bg } }, "✕")
+          ),
+          children
+        )
+      );
+    }
+
+    const s = {
+      pantalla: { fontFamily: FONT, background: C.bg, minHeight: "100vh", display: "flex", flexDirection: "column", color: C.ink, WebkitFontSmoothing: "antialiased" },
+      contenedor: { flex: 1, width: "100%", maxWidth: 560, margin: "0 auto", padding: "22px 18px 112px", boxSizing: "border-box" },
+      card: { background: C.surface, borderRadius: 18, padding: 16, boxShadow: "0 1px 3px rgba(30,25,15,.05)" },
+      parrafo: { color: C.sub, fontSize: 15, lineHeight: 1.5, margin: "0 0 18px" },
+      tabbar: { position: "fixed", bottom: 0, left: 0, right: 0, display: "flex", justifyContent: "space-around", background: "rgba(255,255,255,.85)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderTop: `1px solid ${C.line}`, padding: "8px 0 calc(8px + env(safe-area-inset-bottom))", zIndex: 40 },
+      tabBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", cursor: "pointer", padding: "4px 6px", flex: 1 },
+      badge: { position: "absolute", top: -6, right: -9, minWidth: 17, height: 17, padding: "0 4px", borderRadius: 999, background: C.rojo, color: "#fff", fontSize: 10.5, fontWeight: 700, display: "grid", placeItems: "center", boxSizing: "border-box" },
+      btnCabecera: { display: "flex", alignItems: "center", gap: 5, padding: "8px 13px", borderRadius: 11, border: `1px solid ${C.line}`, background: C.surface, color: C.green, fontSize: 13, fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 },
+      btnPrim: { display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "12px 18px", borderRadius: 13, border: "none", color: "#fff", fontSize: 15.5, fontWeight: 650, cursor: "pointer" },
+      btnSec: { padding: "12px 18px", borderRadius: 13, border: `1px solid ${C.line}`, background: C.surface, color: C.ink, fontSize: 15.5, fontWeight: 600, cursor: "pointer" },
+      btnAdd: { display: "grid", placeItems: "center", width: 44, height: 44, borderRadius: 12, border: "none", background: C.green, cursor: "pointer", flexShrink: 0 },
+      btnDashed: { display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "11px 0", borderRadius: 12, border: `1.5px dashed ${C.line}`, background: "transparent", color: C.green, fontSize: 14.5, fontWeight: 600, cursor: "pointer" },
+      input: { width: "100%", padding: "11px 14px", borderRadius: 12, border: `1px solid ${C.line}`, background: C.bg, fontSize: 15, color: C.ink, outline: "none", fontFamily: FONT, boxSizing: "border-box" },
+      label: { display: "block", fontSize: 12.5, fontWeight: 700, color: C.sub, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 7 },
+      iconoBtn: { display: "grid", placeItems: "center", width: 32, height: 32, borderRadius: 9, border: "none", background: "transparent", cursor: "pointer", flexShrink: 0 },
+      vacio: { background: C.surface, borderRadius: 18, padding: "34px 24px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", boxShadow: "0 1px 3px rgba(30,25,15,.05)" },
+      menu: { position: "absolute", top: "calc(100% + 6px)", right: 0, background: C.surface, borderRadius: 13, boxShadow: "0 8px 30px rgba(30,25,15,.18)", border: `1px solid ${C.line}`, padding: 6, zIndex: 30 },
+      menuItem: { display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "9px 11px", borderRadius: 9, border: "none", background: "transparent", fontSize: 14, cursor: "pointer", textAlign: "left", fontFamily: FONT },
+      overlayInvisible: { position: "fixed", inset: 0, zIndex: 20 },
+      modalFondo: { position: "fixed", inset: 0, background: "rgba(30,25,15,.42)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 60 },
+      modalHoja: { background: C.surface, width: "100%", maxWidth: 560, borderRadius: "22px 22px 0 0", padding: "22px 20px calc(28px + env(safe-area-inset-bottom))", maxHeight: "88vh", overflowY: "auto", boxSizing: "border-box", boxShadow: "0 -10px 40px rgba(30,25,15,.2)" },
+    };
+
+    function ChipAC({ valor, onChange }) {
+      const [abierto, setAbierto] = useState(false);
+      const est = C.ac[valor];
+      return React.createElement("div", { style: { position: "relative" } },
+        React.createElement("button", { onClick: () => setAbierto((v) => !v), style: { padding: "5px 10px", borderRadius: 999, border: "none", background: est.bg, color: est.fg, fontSize: 12.5, fontWeight: 600, cursor: "pointer" } }, valor),
+        abierto && React.createElement(React.Fragment, null,
+          React.createElement("div", { style: s.overlayInvisible, onClick: () => setAbierto(false) }),
+          React.createElement("div", { style: s.menu },
+            AC_OPCIONES.map((op) => React.createElement("button", { key: op, onClick: () => { onChange(op); setAbierto(false); }, style: { ...s.menuItem, color: C.ac[op].fg, fontWeight: op === valor ? 700 : 500 } },
+              React.createElement("span", { style: { width: 9, height: 9, borderRadius: 999, background: C.ac[op].fg, flexShrink: 0 } }),
+              op,
+              op === valor && "✓"
+            ))
+          )
+        )
+      );
+    }
+
+    function Slot({ tipo, nombre, onClick }) {
+      const esComida = tipo === "comida";
+      const col = esComida ? C.comida : C.cena;
+      const soft = esComida ? C.comidaSoft : C.cenaSoft;
+      return React.createElement("button", { onClick, style: { display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: 12, border: `1px solid ${nombre ? soft : C.line}`, background: nombre ? soft : "transparent", cursor: "pointer" } },
+        React.createElement("span", { style: { display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 9, background: soft, color: col, flexShrink: 0 } }, esComida ? "☀️" : "🌙"),
+        React.createElement("span", { style: { display: "flex", flexDirection: "column", flex: 1, minWidth: 0 } },
+          React.createElement("span", { style: { fontSize: 11, fontWeight: 600, color: col, textTransform: "uppercase", letterSpacing: 0.4 } }, esComida ? "Comida" : "Cena"),
+          React.createElement("span", { style: { fontSize: 15, color: nombre ? C.ink : C.sub, fontWeight: nombre ? 550 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, nombre || "Toca para elegir")
+        ),
+        React.createElement("span", { style: { color: C.sub } }, "›")
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
